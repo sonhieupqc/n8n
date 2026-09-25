@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f766e" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>PDF Scanner AI</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icon.svg" alt="" width="28" height="28" />
+      <span>PDF Scanner AI</span>
+    </div>
+    <span id="netStatus" class="chip"></span>
+  </header>
+
+  <main>
+    <!-- ================= TAB: QUÉT ================= -->
+    <section id="tab-scan" class="tab active">
+      <ol class="steps">
+        <li data-step="1" class="on">Nguồn</li>
+        <li data-step="2">Chuẩn hóa</li>
+        <li data-step="3">AI đọc</li>
+        <li data-step="4">Lưu</li>
+      </ol>
+
+      <!-- Bước 1: nguồn đầu vào -->
+      <div class="card">
+        <h2>1. Chọn nguồn đầu vào</h2>
+        <div class="sources">
+          <button class="src" data-src="livecam"><span class="ico">📷</span>Camera</button>
+          <button class="src" data-src="camera"><span class="ico">📸</span>Chụp nhanh</button>
+          <button class="src" data-src="gallery"><span class="ico">🖼️</span>Thư viện ảnh</button>
+          <button class="src" data-src="pdf"><span class="ico">📄</span>File PDF</button>
+          <button class="src" data-src="word"><span class="ico">📝</span>File Word</button>
+          <button class="src" data-src="excel"><span class="ico">📊</span>File Excel</button>
+          <button class="src" data-src="any"><span class="ico">📁</span>File bất kỳ</button>
+        </div>
+        <input type="file" id="in-camera" accept="image/*" capture="environment" hidden />
+        <input type="file" id="in-gallery" accept="image/*" multiple hidden />
+        <input type="file" id="in-pdf" accept="application/pdf,.pdf" multiple hidden />
+        <input type="file" id="in-word" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple hidden />
+        <input type="file" id="in-excel" accept=".xlsx,.xls,.csv,.ods" multiple hidden />
+        <input type="file" id="in-any" accept="image/*,.pdf,.docx,.xlsx,.xls,.csv,.ods,.txt" multiple hidden />
+        <p class="hint">Có thể thêm nhiều nguồn liên tiếp – tất cả các trang sẽ gộp vào 1 tài liệu PDF.</p>
+      </div>
+
+      <!-- Danh sách trang -->
+      <div class="card" id="pagesCard" hidden>
+        <div class="row between">
+          <h2>Các trang (<span id="pageCount">0</span>)</h2>
+          <button class="btn ghost small" id="btnClearPages">Xóa hết</button>
+        </div>
+        <div id="pages" class="pages"></div>
+        <div class="row wrap gap">
+          <label class="lbl">Bộ lọc cho tất cả:
+            <select id="filterAll">
+              <option value="">— giữ nguyên —</option>
+              <option value="none">Gốc</option>
+              <option value="enhance">Làm nét + tăng tương phản</option>
+              <option value="gray">Thang xám</option>
+              <option value="bw">Đen trắng (tài liệu)</option>
+            </select>
+          </label>
+          <button class="btn ghost" id="btnAutoAll">✂️ Tự cắt tất cả</button>
+        </div>
+      </div>
+
+      <!-- Bước 3: AI -->
+      <div class="card" id="aiCard" hidden>
+        <h2>3. AI đọc &amp; hiểu tài liệu</h2>
+        <div class="row wrap gap">
+          <button class="btn" id="btnOcr">🔎 OCR trên máy (miễn phí)</button>
+          <button class="btn accent" id="btnClaude">✨ AI Claude (chính xác cao)</button>
+        </div>
+        <div id="aiProgress" class="progress" hidden><div class="bar"></div><span class="txt"></span></div>
+        <div id="aiResult" hidden>
+          <div class="grid2">
+            <label class="lbl">Loại tài liệu
+              <select id="docType"></select>
+            </label>
+            <label class="lbl">Ngày tài liệu
+              <input id="docDate" type="text" placeholder="dd/mm/yyyy" />
+            </label>
+          </div>
+          <label class="lbl">Tiêu đề
+            <input id="docTitle" type="text" />
+          </label>
+          <label class="lbl">Tóm tắt
+            <textarea id="docSummary" rows="3"></textarea>
+          </label>
+          <h3>Thông tin trích xuất</h3>
+          <table class="fields"><tbody id="docFields"></tbody></table>
+          <button class="btn ghost small" id="btnAddField">+ Thêm trường</button>
+          <details>
+            <summary>Toàn văn (OCR)</summary>
+            <textarea id="docText" rows="10"></textarea>
+            <button class="btn ghost small" id="btnCopyText">📋 Sao chép</button>
+          </details>
+        </div>
+      </div>
+
+      <!-- Bước 4: Lưu -->
+      <div class="card" id="saveCard" hidden>
+        <h2>4. Lưu tài liệu</h2>
+        <label class="lbl">Tên file
+          <input id="fileName" type="text" />
+        </label>
+        <div class="grid2">
+          <label class="lbl">Khổ giấy
+            <select id="pageSize">
+              <option value="a4">A4</option>
+              <option value="letter">Letter</option>
+              <option value="fit">Theo kích thước ảnh</option>
+            </select>
+          </label>
+          <label class="lbl">Chất lượng
+            <select id="quality">
+              <option value="0.6">Nhẹ (gửi Zalo/email)</option>
+              <option value="0.8" selected>Cân bằng</option>
+              <option value="0.95">Cao (in ấn)</option>
+            </select>
+          </label>
+        </div>
+        <div class="checks">
+          <label><input type="checkbox" id="optLocal" checked /> Lưu vào Thư viện trong app</label>
+          <label><input type="checkbox" id="optDevice" checked /> Tải về / chia sẻ lên điện thoại</label>
+          <label><input type="checkbox" id="optDrive" /> Tải lên Google Drive (phân thư mục theo loại)</label>
+          <label><input type="checkbox" id="optTxt" /> Kèm file dữ liệu (.json – văn bản + trường trích xuất)</label>
+        </div>
+        <button class="btn primary big" id="btnSave">💾 Tạo PDF &amp; Lưu</button>
+        <div id="saveLog" class="log"></div>
+      </div>
+    </section>
+
+    <!-- ================= TAB: THƯ VIỆN ================= -->
+    <section id="tab-library" class="tab">
+      <div class="card">
+        <div class="row gap">
+          <input id="search" type="search" placeholder="Tìm theo tên, nội dung, số hóa đơn…" />
+          <select id="filterType"><option value="">Tất cả loại</option></select>
+        </div>
+      </div>
+      <div id="library" class="library"></div>
+      <p id="libEmpty" class="empty">Chưa có tài liệu nào. Hãy quét tài liệu đầu tiên!</p>
+    </section>
+
+    <!-- ================= TAB: CÀI ĐẶT ================= -->
+    <section id="tab-settings" class="tab">
+      <div class="card">
+        <h2>✨ AI Claude</h2>
+        <p class="hint">Dùng AI Claude để đọc chữ (kể cả chữ viết tay, bảng biểu), phân loại và trích xuất thông tin chính xác. Lấy API key tại <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a>.</p>
+        <label class="lbl">Anthropic API key
+          <input id="setApiKey" type="password" placeholder="sk-ant-…" autocomplete="off" />
+        </label>
+        <label class="lbl">Model
+          <select id="setModel">
+            <option value="claude-opus-5">Claude Opus 5 (khuyên dùng – chính xác nhất)</option>
+            <option value="claude-sonnet-5">Claude Sonnet 5 (nhanh, rẻ hơn)</option>
+            <option value="claude-haiku-4-5">Claude Haiku 4.5 (rẻ nhất)</option>
+          </select>
+        </label>
+        <p class="warn">⚠️ Key được lưu trong bộ nhớ trình duyệt của máy này. Không dùng trên máy dùng chung.</p>
+      </div>
+      <div class="card">
+        <h2>☁️ Google Drive</h2>
+        <p class="hint">Cần một <b>OAuth Client ID</b> (loại Web) từ Google Cloud Console – xem hướng dẫn trong README. App chỉ được quyền truy cập các file do chính nó tạo (<code>drive.file</code>).</p>
+        <label class="lbl">Google OAuth Client ID
+          <input id="setClientId" type="text" placeholder="xxxx.apps.googleusercontent.com" />
+        </label>
+        <label class="lbl">Thư mục gốc trên Drive
+          <input id="setFolder" type="text" value="PDF Scanner" />
+        </label>
+        <label><input type="checkbox" id="setSubfolder" checked /> Tạo thư mục con theo loại tài liệu</label>
+        <div class="row gap">
+          <button class="btn" id="btnDriveLogin">Đăng nhập Google</button>
+          <span id="driveStatus" class="chip">Chưa đăng nhập</span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>🔎 OCR trên máy</h2>
+        <label class="lbl">Ngôn ngữ nhận dạng
+          <select id="setOcrLang">
+            <option value="vie+eng">Tiếng Việt + Tiếng Anh</option>
+            <option value="vie">Tiếng Việt</option>
+            <option value="eng">Tiếng Anh</option>
+          </select>
+        </label>
+        <p class="hint">Lần đầu sẽ tải dữ liệu ngôn ngữ (~15MB), sau đó dùng được offline.</p>
+      </div>
+      <div class="card">
+        <h2>Mặc định khi quét</h2>
+        <label class="lbl">Bộ lọc ảnh chụp
+          <select id="setFilter">
+            <option value="enhance">Làm nét + tăng tương phản</option>
+            <option value="none">Gốc</option>
+            <option value="gray">Thang xám</option>
+            <option value="bw">Đen trắng</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="setAutoCrop" checked /> Tự động phát hiện mép giấy &amp; cắt</label>
+        <button class="btn primary" id="btnSaveSettings">Lưu cài đặt</button>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabbar">
+    <button data-tab="scan" class="active"><span>📷</span>Quét</button>
+    <button data-tab="library"><span>🗂️</span>Thư viện</button>
+    <button data-tab="settings"><span>⚙️</span>Cài đặt</button>
+  </nav>
+
+  <!-- Trình chỉnh sửa trang -->
+  <dialog id="editor">
+    <div class="ed-head">
+      <button class="btn ghost small" id="edCancel">✕ Hủy</button>
+      <b>Chỉnh trang</b>
+      <button class="btn primary small" id="edDone">✓ Xong</button>
+    </div>
+    <div class="ed-body">
+      <div class="ed-stage" id="edStage">
+        <canvas id="edCanvas"></canvas>
+      </div>
+      <div class="ed-tools">
+        <button class="btn ghost small" id="edAuto">✂️ Tự dò mép</button>
+        <button class="btn ghost small" id="edFull">⬜ Toàn ảnh</button>
+        <button class="btn ghost small" id="edRotL">⟲</button>
+        <button class="btn ghost small" id="edRotR">⟳</button>
+        <select id="edFilter">
+          <option value="none">Gốc</option>
+          <option value="enhance">Làm nét</option>
+          <option value="gray">Xám</option>
+          <option value="bw">Đen trắng</option>
+        </select>
+      </div>
+      <p class="hint center">Kéo 4 góc tròn trùng với 4 góc tờ giấy.</p>
+    </div>
+  </dialog>
+
+  <!-- Camera trực tiếp -->
+  <dialog id="camera">
+    <div class="cam-wrap">
+      <video id="camVideo" playsinline autoplay muted></video>
+      <canvas id="camOverlay"></canvas>
+      <div class="cam-bar">
+        <button class="btn ghost" id="camClose">Xong (<span id="camCount">0</span>)</button>
+        <button class="shutter" id="camShot" aria-label="Chụp"></button>
+        <button class="btn ghost" id="camFlip">🔄</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
