@@ -15,8 +15,8 @@
 
 App là các file tĩnh (HTML/JS/CSS), không cần máy chủ riêng. Camera và Google Drive **bắt buộc chạy qua HTTPS**, nên anh đưa thư mục `pdf-scanner/` lên một trong các nơi sau:
 
-- **Netlify Drop** (dễ nhất): vào https://app.netlify.com/drop, kéo thả thư mục `pdf-scanner` là có link `https://…netlify.app`.
-- **GitHub Pages**: Settings → Pages → chọn nhánh chứa code, thư mục gốc; mở `https://<user>.github.io/<repo>/pdf-scanner/`.
+- **GitHub Pages (tự động)**: repo có sẵn workflow `.github/workflows/deploy-pdf-scanner.yml`. Bật một lần tại **Settings → Pages → Build and deployment → Source: GitHub Actions** (và bật tab **Actions** nếu GitHub hỏi). Từ đó mỗi lần code trong `pdf-scanner/` được gộp vào nhánh `master`, app tự cập nhật tại **https://sonhieupqc.github.io/n8n/**. Muốn chạy ngay: tab **Actions → Deploy PDF Scanner to GitHub Pages → Run workflow**.
+- **Netlify Drop**: vào https://app.netlify.com/drop, kéo thả thư mục `pdf-scanner` là có link `https://…netlify.app`.
 - **Thử trên máy tính**: `cd pdf-scanner && python3 -m http.server 8080` rồi mở http://localhost:8080.
 
 Trên điện thoại: mở link → menu trình duyệt → **Thêm vào màn hình chính / Cài đặt ứng dụng**.
@@ -35,7 +35,7 @@ Trên điện thoại: mở link → menu trình duyệt → **Thêm vào màn h
 2. **APIs & Services → Library** → bật **Google Drive API**.
 3. **OAuth consent screen**: chọn *External*, điền tên app + email, thêm email của anh vào *Test users*.
 4. **Credentials → Create credentials → OAuth client ID** → loại **Web application**
-   → ở *Authorized JavaScript origins* thêm địa chỉ app, ví dụ `https://ten-app.netlify.app` (và `http://localhost:8080` nếu thử trên máy).
+   → ở *Authorized JavaScript origins* thêm địa chỉ app, ví dụ `https://sonhieupqc.github.io` (GitHub Pages) hoặc `https://ten-app.netlify.app` (và `http://localhost:8080` nếu thử trên máy).
 5. Copy **Client ID** (`…apps.googleusercontent.com`) → dán vào **Cài đặt → Google Drive** trong app → bấm **Đăng nhập Google**.
 
 App chỉ xin quyền `drive.file`: **chỉ thấy và sửa các file do chính app tạo**, không đọc được các file khác trên Drive của anh.
