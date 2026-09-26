@@ -3,29 +3,47 @@
 // ------------------------------------------------------------------ IndexedDB
 const DB_NAME = 'pdf-scanner';
 const STORE = 'docs';
+const DRAFT = 'draft';
 
+let dbPromise = null;
 function openDb() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
+  dbPromise ??= new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 2);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(DRAFT)) db.createObjectStore(DRAFT, { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => {
+      dbPromise = null;
+      reject(req.error);
+    };
   });
+  return dbPromise;
 }
 
-async function tx(mode, fn) {
+async function tx(mode, fn, storeName = STORE) {
   const db = await openDb();
   return new Promise((resolve, reject) => {
-    const t = db.transaction(STORE, mode);
-    const store = t.objectStore(STORE);
+    const t = db.transaction(storeName, mode);
+    const store = t.objectStore(storeName);
     const r = fn(store);
     t.oncomplete = () => resolve(r?.result);
     t.onerror = () => reject(t.error);
   });
 }
+
+/** Phiên quét dở: lưu từng trang (ảnh gốc + thông số chỉnh) để khôi phục khi app bị tắt. */
+export const drafts = {
+  put: (page) => tx('readwrite', (s) => s.put(page), DRAFT),
+  del: (id) => tx('readwrite', (s) => s.delete(id), DRAFT),
+  clear: () => tx('readwrite', (s) => s.clear(), DRAFT),
+  all: async () => {
+    const list = (await tx('readonly', (s) => s.getAll(), DRAFT)) || [];
+    return list.sort((a, b) => a.order - b.order);
+  },
+};
 
 export const db = {
   put: (doc) => tx('readwrite', (s) => s.put(doc)),
@@ -162,14 +180,68 @@ async function uploadFile(blob, name, parentId, description, appProperties) {
   });
 }
 
-/** Tải PDF (và file dữ liệu tùy chọn) lên Drive: <Thư mục gốc>/<Loại tài liệu>/ */
-export async function uploadToDrive({ clientId, rootFolder, useSubfolder, docType, pdfBlob, pdfName, description, jsonBlob, props }) {
+/** Các cấp thư mục theo kiểu sắp xếp đã chọn. */
+export function drivePath(structure, { docType, entity, date }) {
+  const d = String(date || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  const year = d ? d[3] : String(new Date().getFullYear());
+  const month = d ? `${year}-${d[2].padStart(2, '0')}` : new Date().toISOString().slice(0, 7);
+  const ent = entity || 'Chưa phân loại';
+  switch (structure) {
+    case 'none':
+      return [];
+    case 'entity-type':
+      return [ent, docType];
+    case 'entity-type-year':
+      return [ent, docType, year];
+    case 'year-month':
+      return [year, month];
+    default:
+      return [docType];
+  }
+}
+
+/** Tải PDF (và file dữ liệu tùy chọn) lên Drive: <Thư mục gốc>/<các cấp theo cài đặt>/ */
+export async function uploadToDrive({ clientId, rootFolder, path = [], pdfBlob, pdfName, description, jsonBlob, props }) {
   await driveSignIn(clientId);
   let parent = await ensureFolder(rootFolder || 'PDF Scanner');
-  if (useSubfolder && docType) parent = await ensureFolder(docType, parent);
+  for (const seg of path) if (seg) parent = await ensureFolder(String(seg), parent);
   const appProperties = {};
   for (const [k, v] of Object.entries(props || {})) if (v) appProperties[k] = String(v).slice(0, 30); // Drive giới hạn 124 byte cho khóa + giá trị
   const pdf = await uploadFile(pdfBlob, pdfName, parent, description, appProperties);
   if (jsonBlob) await uploadFile(jsonBlob, pdfName.replace(/\.pdf$/i, '.json'), parent, '', appProperties);
   return pdf;
+}
+
+// ------------------------------------------------------------------ Lịch nhắc (.ics)
+function icsDate(ddmmyyyy) {
+  const m = String(ddmmyyyy).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!m) return null;
+  return `${m[3]}${m[2].padStart(2, '0')}${m[1].padStart(2, '0')}`;
+}
+const icsEsc = (s) => String(s || '').replace(/[\\;,]/g, (c) => '\\' + c).replace(/\n/g, '\\n');
+
+/** Tạo file lịch: sự kiện cả ngày + nhắc trước 7 ngày và 1 ngày. */
+export function buildIcs(events) {
+  const now = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//PDF Scanner AI//VI', 'CALSCALE:GREGORIAN'];
+  for (const e of events) {
+    const d = icsDate(e.date);
+    if (!d) continue;
+    const next = new Date(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8) + 1);
+    const end = `${next.getFullYear()}${String(next.getMonth() + 1).padStart(2, '0')}${String(next.getDate()).padStart(2, '0')}`;
+    lines.push(
+      'BEGIN:VEVENT',
+      `UID:${d}-${Math.random().toString(36).slice(2)}@pdf-scanner`,
+      `DTSTAMP:${now}`,
+      `DTSTART;VALUE=DATE:${d}`,
+      `DTEND;VALUE=DATE:${end}`,
+      `SUMMARY:${icsEsc(e.title)}`,
+      `DESCRIPTION:${icsEsc(e.description)}`,
+      'BEGIN:VALARM', 'TRIGGER:-P7D', 'ACTION:DISPLAY', `DESCRIPTION:${icsEsc(e.title)}`, 'END:VALARM',
+      'BEGIN:VALARM', 'TRIGGER:-P1D', 'ACTION:DISPLAY', `DESCRIPTION:${icsEsc(e.title)}`, 'END:VALARM',
+      'END:VEVENT',
+    );
+  }
+  lines.push('END:VCALENDAR');
+  return new Blob([lines.join('\r\n')], { type: 'text/calendar' });
 }

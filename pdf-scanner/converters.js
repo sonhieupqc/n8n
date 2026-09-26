@@ -13,6 +13,7 @@ export const LIBS = {
   html2canvas: CDN + 'html2canvas@1.4.1/dist/html2canvas.min.js',
   tesseract: CDN + 'tesseract.js@5.1.1/dist/tesseract.min.js',
   anthropic: CDN + '@anthropic-ai/sdk/+esm',
+  font: CDN + '@expo-google-fonts/roboto@0.4.3/400Regular/Roboto_400Regular.ttf',
 };
 
 const loaded = new Map();
