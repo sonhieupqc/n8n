@@ -1,8 +1,10 @@
-// AI đọc & hiểu: OCR trên máy (Tesseract), phân loại + trích xuất bằng luật,
-// hoặc dùng Claude (đọc ảnh trực tiếp, phân loại và trích xuất có cấu trúc).
+// AI đọc & hiểu tài liệu:
+//  - OCR trên máy (Tesseract.js) kèm tọa độ từng chữ để tạo PDF tìm kiếm được
+//  - Phân loại, trích xuất, tìm hạn & nhận diện đơn vị bằng luật (offline)
+//  - Claude: đọc ảnh trực tiếp, trả về dữ liệu có cấu trúc; hỏi đáp với tài liệu
 
 import { LIBS, loadScript } from './converters.js';
-import { scaleCanvas } from './imaging.js';
+import { scaleCanvas, blobToCanvas } from './imaging.js';
 
 export const DOC_TYPES = [
   'Hóa đơn',
@@ -17,41 +19,67 @@ export const DOC_TYPES = [
   'Hồ sơ học tập',
   'Hồ sơ visa / di trú',
   'Y tế',
+  'Bảo hiểm',
   'Thư từ',
   'Khác',
 ];
+
+/** Bỏ dấu tiếng Việt, chữ thường – dùng để so khớp không phân biệt dấu. */
+export function fold(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase();
+}
 
 // ------------------------------------------------------------------ OCR trên máy
 let worker = null;
 let workerLang = '';
 const ocrState = { i: 0, n: 1, cb: null };
 
-export async function ocrPages(canvases, lang, onProgress) {
+async function getWorker(lang, onProgress) {
   await loadScript(LIBS.tesseract);
-  ocrState.cb = onProgress;
-  ocrState.n = canvases.length;
-  ocrState.i = 0;
   if (!worker || workerLang !== lang) {
     if (worker) await worker.terminate();
-    onProgress?.(0, 'Đang tải bộ nhận dạng chữ…');
+    onProgress?.(0, 'Đang tải bộ nhận dạng chữ (lần đầu ~15MB)…');
     worker = await window.Tesseract.createWorker(lang, 1, {
       logger: (m) => {
         const { i, n, cb } = ocrState;
         if (m.status === 'recognizing text') cb?.((i + m.progress) / n, `Đang đọc chữ trang ${i + 1}/${n}`);
-        else if (m.progress != null) cb?.(0, `${m.status} ${Math.round(m.progress * 100)}%`);
+        else if (m.progress != null) cb?.(0, `Chuẩn bị OCR: ${Math.round(m.progress * 100)}%`);
       },
     });
     workerLang = lang;
   }
-  const texts = [];
-  for (let i = 0; i < canvases.length; i++) {
+  return worker;
+}
+
+/**
+ * OCR danh sách ảnh (Blob hoặc canvas). Trả về cho mỗi trang:
+ * { text, width, height, words: [{ text, x0, y0, x1, y1 }] }
+ */
+export async function ocrImages(images, lang, onProgress) {
+  const w = await getWorker(lang, onProgress);
+  ocrState.cb = onProgress;
+  ocrState.n = images.length;
+  const out = [];
+  for (let i = 0; i < images.length; i++) {
     ocrState.i = i;
-    onProgress?.(i / canvases.length, `Đang đọc chữ trang ${i + 1}/${canvases.length}`);
-    const { data } = await worker.recognize(canvases[i]);
-    texts.push(data.text.trim());
+    onProgress?.(i / images.length, `Đang đọc chữ trang ${i + 1}/${images.length}`);
+    const img = images[i] instanceof Blob ? await blobToCanvas(images[i]) : images[i];
+    const { data } = await w.recognize(img, {}, { text: true, blocks: true });
+    const words = [];
+    for (const b of data.blocks || [])
+      for (const p of b.paragraphs || [])
+        for (const l of p.lines || [])
+          for (const wd of l.words || [])
+            if (wd.text.trim() && wd.confidence > 20) words.push({ text: wd.text, ...wd.bbox });
+    out.push({ text: (data.text || '').trim(), width: img.width, height: img.height, words });
   }
   onProgress?.(1, 'Xong');
-  return texts;
+  return out;
 }
 
 // ------------------------------------------------------------------ Phân loại & trích xuất bằng luật
@@ -114,55 +142,147 @@ export function extractFields(text) {
   return fields;
 }
 
-export function localAnalyze(text) {
+// ------------------------------------------------------------------ Hạn, độ nhạy cảm, đơn vị
+const DATE_RE = /(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{4})|ng[aà]y\s*(\d{1,2})\s*th[aá]ng\s*(\d{1,2})\s*n[aă]m\s*(\d{4})/i;
+const DEADLINE_LABELS = [
+  ['Hạn thanh toán', /h[aạ]n\s*(thanh\s*to[aá]n|n[oộ]p|tr[aả])|due\s*date|payment\s*due/i],
+  ['Ngày hết hạn', /(ng[aà]y\s*)?h[eế]t\s*h[aạ]n|c[oó]\s*gi[aá]\s*tr[iị]\s*([đd][eế]n|t[oớ]i)|expir\w*|valid\s*(until|thru|through)/i],
+  ['Hạn hợp đồng', /th[oờ]i\s*h[aạ]n\s*(thu[eê]|h[oợ]p\s*[đd][oồ]ng)|[đd][eế]n\s*h[eế]t\s*ng[aà]y/i],
+  ['Ngày hẹn', /l[iị]ch\s*h[eẹ]n|ng[aà]y\s*h[eẹ]n|appointment|interview/i],
+];
+
+function normDate(m) {
+  const d = m[1] || m[4];
+  const mo = m[2] || m[5];
+  const y = m[3] || m[6];
+  if (+mo < 1 || +mo > 12 || +d < 1 || +d > 31) return '';
+  return `${String(d).padStart(2, '0')}/${String(mo).padStart(2, '0')}/${y}`;
+}
+
+export function findDeadlines(text) {
+  const out = [];
+  const lines = text.split('\n');
+  lines.forEach((line, i) => {
+    for (const [label, re] of DEADLINE_LABELS) {
+      if (!re.test(line)) continue;
+      const scope = line + ' ' + (lines[i + 1] || '');
+      const idx = scope.search(re);
+      const m = scope.slice(idx).match(DATE_RE);
+      if (m) {
+        const date = normDate(m);
+        if (date && !out.some((x) => x.date === date && x.label === label)) out.push({ label, date });
+      }
+    }
+  });
+  return out.slice(0, 6);
+}
+
+export function isSensitive(text, type) {
+  if (type === 'Giấy tờ tùy thân' || type === 'Sao kê / Chứng từ ngân hàng' || type === 'Y tế') return true;
+  return /\b\d{12}\b|passport\s*no|h[oộ]\s*chi[eế]u\s*s[oố]|m[aậ]t\s*kh[aẩ]u|password|\bssn\b|social\s*security/i.test(text);
+}
+
+/**
+ * Danh sách đơn vị từ cài đặt, mỗi dòng: "Tên | từ khóa 1, từ khóa 2".
+ * Trả về [{ name, keywords: [..] }]
+ */
+export function parseEntities(src) {
+  return String(src || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      const [name, kw = ''] = l.split('|');
+      const keywords = [name, ...kw.split(',')].map((k) => fold(k.trim())).filter((k) => k.length > 2);
+      return { name: name.trim(), keywords };
+    });
+}
+
+export function detectEntity(text, entities) {
+  const t = fold(text);
+  let best = '';
+  let bestN = 0;
+  for (const e of entities) {
+    let n = 0;
+    for (const k of e.keywords) n += t.split(k).length - 1;
+    if (n > bestN) {
+      bestN = n;
+      best = e.name;
+    }
+  }
+  return best;
+}
+
+export function localAnalyze(text, entities = []) {
   const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 3);
   const type = classifyText(text);
   const fields = extractFields(text);
-  const title = (lines.find((l) => l === l.toUpperCase() && /[A-ZÀ-Ỹ]/.test(l) && l.length < 80) || lines[0] || type).slice(0, 80);
-  const date = fields.find((f) => f.label === 'Ngày')?.value || '';
+  const title = (lines.find((l) => l === l.toUpperCase() && /[A-ZÀ-Ỹ]{3}/.test(l) && l.length < 80) || lines[0] || type).slice(0, 80);
+  const deadlines = findDeadlines(text);
+  const date = fields.find((f) => f.label === 'Ngày' && !deadlines.some((d) => d.date === f.value))?.value || '';
   return {
     doc_type: type,
+    entity: detectEntity(text, entities),
     title,
     date,
     summary: lines.slice(0, 3).join(' ').slice(0, 240),
     fields,
+    deadlines,
+    sensitive: isSensitive(text, type),
     full_text: text,
     tags: [],
   };
 }
 
 // ------------------------------------------------------------------ Claude
-const SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['doc_type', 'title', 'date', 'summary', 'fields', 'full_text', 'suggested_filename', 'tags'],
-  properties: {
-    doc_type: { type: 'string', enum: DOC_TYPES },
-    title: { type: 'string', description: 'Tiêu đề ngắn gọn của tài liệu' },
-    date: { type: 'string', description: 'Ngày của tài liệu dạng dd/mm/yyyy, rỗng nếu không có' },
-    summary: { type: 'string', description: 'Tóm tắt 1-3 câu bằng tiếng Việt' },
-    fields: {
-      type: 'array',
-      description: 'Các thông tin quan trọng: số chứng từ, bên liên quan, MST, số tiền, hạn, số tài khoản…',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['label', 'value'],
-        properties: { label: { type: 'string' }, value: { type: 'string' } },
+function buildSchema(entityNames) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['doc_type', 'entity', 'title', 'date', 'summary', 'fields', 'deadlines', 'sensitive', 'full_text', 'suggested_filename', 'tags'],
+    properties: {
+      doc_type: { type: 'string', enum: DOC_TYPES },
+      entity: entityNames.length
+        ? { type: 'string', enum: [...entityNames, ''], description: 'Đơn vị/chủ sở hữu mà tài liệu thuộc về; rỗng nếu không rõ' }
+        : { type: 'string', description: 'Tên cá nhân/tổ chức chính mà tài liệu thuộc về' },
+      title: { type: 'string', description: 'Tiêu đề ngắn gọn của tài liệu' },
+      date: { type: 'string', description: 'Ngày lập/ký tài liệu dạng dd/mm/yyyy, rỗng nếu không có' },
+      summary: { type: 'string', description: 'Tóm tắt 1-3 câu bằng tiếng Việt, nêu điều quan trọng nhất' },
+      fields: {
+        type: 'array',
+        description: 'Thông tin quan trọng: số chứng từ, các bên, MST, số tiền, số tài khoản, địa chỉ…',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['label', 'value'],
+          properties: { label: { type: 'string' }, value: { type: 'string' } },
+        },
       },
+      deadlines: {
+        type: 'array',
+        description: 'Các mốc thời gian cần nhắc: hạn thanh toán, ngày hết hạn giấy tờ/visa/hợp đồng, lịch hẹn',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['label', 'date'],
+          properties: { label: { type: 'string' }, date: { type: 'string', description: 'dd/mm/yyyy' } },
+        },
+      },
+      sensitive: { type: 'boolean', description: 'true nếu có số giấy tờ tùy thân, tài khoản ngân hàng, thông tin y tế…' },
+      full_text: { type: 'string', description: 'Toàn bộ nội dung chữ trên tài liệu, giữ xuống dòng' },
+      suggested_filename: { type: 'string', description: 'Tên file không dấu, dạng Loai_YYYY-MM-DD_NoiDung' },
+      tags: { type: 'array', items: { type: 'string' }, description: '3-6 từ khóa tiếng Việt để tìm kiếm' },
     },
-    full_text: { type: 'string', description: 'Toàn bộ nội dung chữ trên tài liệu, giữ xuống dòng' },
-    suggested_filename: { type: 'string', description: 'Tên file không dấu, dạng Loai_YYYY-MM-DD_NoiDung' },
-    tags: { type: 'array', items: { type: 'string' } },
-  },
-};
+  };
+}
 
-const PROMPT = `Bạn là trợ lý số hóa tài liệu cho một gia đình kinh doanh ở Việt Nam.
+const PROMPT = `Bạn là trợ lý số hóa và quản lý tài liệu cho một gia đình kinh doanh ở Việt Nam.
 Các ảnh đính kèm là các trang của MỘT tài liệu (thứ tự như gửi). Hãy:
-1. Đọc chính xác toàn bộ chữ (OCR), kể cả bảng biểu và chữ viết tay; giữ nguyên dấu tiếng Việt.
-2. Phân loại tài liệu vào một trong các loại cho sẵn.
-3. Trích xuất các thông tin quan trọng thành cặp nhãn/giá trị bằng tiếng Việt (ví dụ: Số hóa đơn, Đơn vị bán, MST, Tổng tiền, Ngày, Bên A, Bên B, Thời hạn, Số tài khoản…).
-4. Viết tóm tắt ngắn gọn và đề xuất tên file.
+1. Đọc chính xác toàn bộ chữ (OCR), kể cả bảng biểu, con dấu và chữ viết tay; giữ nguyên dấu tiếng Việt.
+2. Phân loại tài liệu và xác định đơn vị/chủ sở hữu (nếu có danh sách, chọn trong danh sách).
+3. Trích xuất các thông tin quan trọng thành cặp nhãn/giá trị bằng tiếng Việt (ví dụ: Số hóa đơn, Đơn vị bán, MST, Tổng tiền, Bên A, Bên B, Giá thuê, Số tài khoản…). Số tiền giữ nguyên định dạng và ghi đơn vị tiền.
+4. Liệt kê các mốc thời gian cần nhắc việc (hạn thanh toán, ngày hết hạn, thời hạn hợp đồng, lịch hẹn).
+5. Viết tóm tắt ngắn, đề xuất tên file và từ khóa.
 Nếu có phần chữ trích sẵn từ file gốc bên dưới, dùng nó để kiểm tra lại kết quả đọc.`;
 
 let sdkPromise = null;
@@ -173,48 +293,89 @@ async function getClient(apiKey) {
   return new Anthropic({ apiKey, dangerouslyAllowBrowser: true, maxRetries: 2 });
 }
 
-async function canvasToBase64(canvas) {
+async function toBase64Jpeg(img) {
+  const canvas = img instanceof Blob ? await blobToCanvas(img) : img;
   const small = scaleCanvas(canvas, 1568);
   const url = small.toDataURL('image/jpeg', 0.85);
   return url.slice(url.indexOf(',') + 1);
 }
 
-export async function claudeAnalyze({ apiKey, model, canvases, nativeText, onProgress }) {
+async function send(client, model, params) {
+  const base = { model, ...params };
+  if (model !== 'claude-haiku-4-5') base.output_config = { ...(base.output_config || {}), effort: params.effort || 'low' };
+  delete base.effort;
+  let message;
+  if (model === 'claude-opus-5') {
+    // Tự chuyển sang model dự phòng nếu yêu cầu bị bộ lọc an toàn từ chối.
+    message = await client.beta.messages
+      .stream({ ...base, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' })
+      .finalMessage();
+  } else {
+    message = await client.messages.stream(base).finalMessage();
+  }
+  if (message.stop_reason === 'refusal') throw new Error('Claude từ chối xử lý tài liệu này.');
+  if (message.stop_reason === 'max_tokens') throw new Error('Tài liệu quá dài – hãy chia nhỏ số trang.');
+  return message.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+}
+
+export async function claudeAnalyze({ apiKey, model, images, nativeText, entities = [], onProgress }) {
   if (!apiKey) throw new Error('Chưa nhập Anthropic API key trong phần Cài đặt.');
   onProgress?.(0.05, 'Đang chuẩn bị ảnh…');
-  const pages = canvases.slice(0, 20);
+  const pages = images.slice(0, 20);
   const content = [];
   for (let i = 0; i < pages.length; i++) {
     content.push({ type: 'text', text: `Trang ${i + 1}:` });
-    content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: await canvasToBase64(pages[i]) } });
+    content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: await toBase64Jpeg(pages[i]) } });
+    onProgress?.(0.05 + (0.15 * (i + 1)) / pages.length, 'Đang chuẩn bị ảnh…');
   }
   let text = PROMPT;
-  if (canvases.length > pages.length) text += `\n(Tài liệu có ${canvases.length} trang, chỉ gửi ${pages.length} trang đầu.)`;
+  const names = entities.map((e) => e.name);
+  if (names.length) text += `\n\nDanh sách đơn vị/chủ sở hữu: ${names.join('; ')}.`;
+  text += `\nHôm nay là ${new Date().toLocaleDateString('vi-VN')}.`;
+  if (images.length > pages.length) text += `\n(Tài liệu có ${images.length} trang, chỉ gửi ${pages.length} trang đầu.)`;
   if (nativeText) text += `\n\nChữ trích sẵn từ file gốc:\n"""\n${nativeText.slice(0, 60000)}\n"""`;
   content.push({ type: 'text', text });
 
-  onProgress?.(0.2, 'Claude đang đọc tài liệu…');
+  onProgress?.(0.25, 'Claude đang đọc và phân tích tài liệu…');
   const client = await getClient(apiKey);
-  const params = {
-    model,
+  const out = await send(client, model, {
     max_tokens: 32000,
-    output_config: { format: { type: 'json_schema', schema: SCHEMA } },
+    output_config: { format: { type: 'json_schema', schema: buildSchema(names) } },
     messages: [{ role: 'user', content }],
-  };
-  if (model !== 'claude-haiku-4-5') params.output_config.effort = 'low';
-
-  let message;
-  if (model === 'claude-opus-5') {
-    // Tự chuyển sang model dự phòng nếu yêu cầu bị từ chối bởi bộ lọc an toàn.
-    const stream = client.beta.messages.stream({ ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' });
-    message = await stream.finalMessage();
-  } else {
-    message = await client.messages.stream(params).finalMessage();
-  }
-
-  if (message.stop_reason === 'refusal') throw new Error('Claude từ chối xử lý tài liệu này.');
-  if (message.stop_reason === 'max_tokens') throw new Error('Tài liệu quá dài – hãy chia nhỏ số trang.');
-  const out = message.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+  });
   onProgress?.(1, 'Xong');
   return JSON.parse(out);
+}
+
+/** Hỏi đáp về một tài liệu đã lưu. history: [{ role, content }] */
+export async function askDocument({ apiKey, model, doc, question, history = [] }) {
+  if (!apiKey) throw new Error('Chưa nhập Anthropic API key trong phần Cài đặt.');
+  const client = await getClient(apiKey);
+  const context = [
+    `Tên file: ${doc.name}`,
+    `Loại: ${doc.docType}${doc.entity ? ` · Đơn vị: ${doc.entity}` : ''}${doc.date ? ` · Ngày: ${doc.date}` : ''}`,
+    doc.title && `Tiêu đề: ${doc.title}`,
+    doc.summary && `Tóm tắt: ${doc.summary}`,
+    ...(doc.fields || []).map((f) => `- ${f.label}: ${f.value}`),
+    ...(doc.deadlines || []).map((d) => `- Mốc: ${d.label} ${d.date}`),
+    '',
+    'Toàn văn:',
+    (doc.text || '(chưa có – tài liệu chưa được OCR)').slice(0, 120000),
+  ]
+    .filter((x) => x !== undefined && x !== false)
+    .join('\n');
+  const messages = [
+    { role: 'user', content: `<tai_lieu>\n${context}\n</tai_lieu>\n\nHãy trả lời các câu hỏi của tôi về tài liệu này.` },
+    { role: 'assistant', content: 'Tôi đã đọc tài liệu. Anh/chị muốn hỏi gì?' },
+    ...history,
+    { role: 'user', content: question },
+  ];
+  return send(client, model, {
+    max_tokens: 8000,
+    effort: 'medium',
+    system:
+      'Bạn là trợ lý tài liệu. Trả lời bằng tiếng Việt, ngắn gọn, chính xác, chỉ dựa trên nội dung tài liệu. ' +
+      'Nếu tài liệu không có thông tin, nói rõ là không có. Khi được yêu cầu dịch hoặc soạn thảo, làm đầy đủ.',
+    messages,
+  });
 }

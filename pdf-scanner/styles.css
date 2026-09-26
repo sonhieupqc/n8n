@@ -190,3 +190,73 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.7); }
   opacity: 0; pointer-events: none; transition: 0.25s; z-index: 50; max-width: calc(100vw - 32px); text-align: center;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ---------- Bổ sung v2 ---------- */
+.lbl.inline { flex-direction: row; align-items: center; gap: 8px; margin: 0; }
+.lbl.inline select { width: auto; }
+.banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+  background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; font-size: 14px;
+}
+.note { font-size: 13px; padding: 8px 10px; border-radius: 10px; background: rgba(15, 118, 110, 0.1); margin: 8px 0; }
+.note.warn { background: rgba(245, 158, 11, 0.15); color: inherit; }
+.btn.danger { color: var(--danger); }
+.btn.dark, .chip.dark { background: rgba(0, 0, 0, 0.55); color: #fff; border-color: rgba(255, 255, 255, 0.35); }
+.adv { margin: 8px 0; border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; }
+.adv summary { margin: 0; }
+.page .warnb {
+  position: absolute; top: 4px; right: 4px; background: var(--accent); color: #fff;
+  font-size: 11px; border-radius: 99px; padding: 1px 7px; font-weight: 700;
+}
+.page.busy::after {
+  content: ''; position: absolute; inset: 0; background: rgba(255, 255, 255, 0.4);
+  animation: pulse 1s infinite alternate;
+}
+@keyframes pulse { from { opacity: 0.2; } to { opacity: 0.8; } }
+
+.filters { margin: 8px 0; }
+.filters select { flex: 1; min-width: 120px; width: auto; }
+.stats { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--muted); }
+.stats b { color: var(--text); }
+.due h2 { margin-bottom: 8px; }
+.due-item {
+  display: flex; justify-content: space-between; gap: 8px; align-items: center;
+  padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; cursor: pointer;
+}
+.due-item:last-child { border-bottom: 0; }
+.due-item .when { font-weight: 700; white-space: nowrap; }
+.due-item .when.late { color: var(--danger); }
+.due-item .when.soon { color: var(--accent); }
+.doc { cursor: pointer; }
+.doc .badges { margin-top: 4px; }
+
+.dlg-body { height: calc(100dvh - 56px - env(safe-area-inset-top)); overflow-y: auto; padding: 12px 16px calc(24px + env(safe-area-inset-bottom)); max-width: 760px; margin: 0 auto; }
+.dlg-top { display: flex; gap: 12px; margin-bottom: 8px; }
+.dlg-top img { width: 96px; height: 128px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); flex: none; background: #fff; }
+.dlg-acts { display: flex; flex-wrap: wrap; gap: 6px; align-content: flex-start; }
+.card-in { background: var(--card); border-radius: var(--radius); padding: 12px; margin: 14px 0; box-shadow: var(--shadow); }
+.quick { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.chip-btn {
+  border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; font-size: 12px;
+  border-radius: 99px; padding: 5px 10px; cursor: pointer;
+}
+.chat-log { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; max-height: 50dvh; overflow-y: auto; }
+.msg-q, .msg-a { padding: 8px 12px; border-radius: 12px; font-size: 14px; white-space: pre-wrap; max-width: 92%; }
+.msg-q { align-self: flex-end; background: var(--primary); color: var(--primary-ink); }
+.msg-a { align-self: flex-start; background: var(--bg); border: 1px solid var(--line); }
+.msg-a.wait { color: var(--muted); font-style: italic; }
+.chat .row input { flex: 1; }
+
+.cam-top {
+  position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: calc(12px + env(safe-area-inset-top)) 12px 12px; background: linear-gradient(rgba(0, 0, 0, 0.6), transparent);
+}
+.shutter { position: relative; }
+.shutter svg { position: absolute; inset: -9px; width: calc(100% + 18px); height: calc(100% + 18px); transform: rotate(-90deg); }
+.shutter circle { fill: none; stroke: #14b8a6; stroke-width: 5; stroke-dasharray: 226; stroke-dashoffset: 226; transition: stroke-dashoffset 0.15s linear; }
+.toast { display: flex; align-items: center; gap: 12px; pointer-events: none; }
+.toast.show { pointer-events: auto; }
+.toast .act { background: none; border: 0; color: #5eead4; font: inherit; font-weight: 700; cursor: pointer; padding: 0; }
+[hidden] { display: none !important; }
+.fields input { width: 100%; font: inherit; font-size: 14px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }

@@ -285,7 +285,56 @@ export function rotateCanvas(src, deg) {
   return c;
 }
 
-/** Bộ lọc: none | enhance (làm nét, cân bằng sáng) | gray | bw (đen trắng thích nghi). */
+/**
+ * Ước lượng nền giấy (ánh sáng) bằng cách thu nhỏ, giãn nở vùng sáng để xóa chữ,
+ * rồi phóng to mượt lại. Chia ảnh cho nền sẽ khử bóng tay/bóng điện thoại.
+ */
+function flattenLighting(ctx, w, h) {
+  // Lưới nền cố định theo tỷ lệ trang (48 ô theo cạnh dài) để kết quả giống nhau ở mọi độ phân giải
+  const cells = 48 / Math.max(w, h);
+  const sw = Math.max(8, Math.round(w * cells));
+  const sh = Math.max(8, Math.round(h * cells));
+  const small = makeCanvas(sw, sh);
+  const sctx = small.getContext('2d');
+  sctx.imageSmoothingQuality = 'high';
+  sctx.drawImage(ctx.canvas, 0, 0, sw, sh);
+  const im = sctx.getImageData(0, 0, sw, sh);
+  let a = im.data;
+  for (let pass = 0; pass < 3; pass++) {
+    const b = new Uint8ClampedArray(a);
+    for (let y = 0; y < sh; y++) {
+      for (let x = 0; x < sw; x++) {
+        const i = (y * sw + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          let m = 0;
+          for (let dy = -1; dy <= 1; dy++) {
+            const yy = Math.min(sh - 1, Math.max(0, y + dy));
+            for (let dx = -1; dx <= 1; dx++) {
+              const xx = Math.min(sw - 1, Math.max(0, x + dx));
+              const v = a[(yy * sw + xx) * 4 + c];
+              if (v > m) m = v;
+            }
+          }
+          b[i + c] = m;
+        }
+      }
+    }
+    a = b;
+  }
+  im.data.set(a);
+  sctx.putImageData(im, 0, 0);
+  const bg = makeCanvas(w, h);
+  const bctx = bg.getContext('2d');
+  bctx.imageSmoothingQuality = 'high';
+  bctx.filter = `blur(${Math.max(1, Math.round(Math.max(w, h) / 400))}px)`;
+  bctx.drawImage(small, 0, 0, w, h);
+  return bctx.getImageData(0, 0, w, h).data;
+}
+
+/**
+ * Bộ lọc: none | magic (tự động khử bóng, nền trắng, màu tươi) | enhance (làm nét, cân bằng sáng)
+ * | gray | bw (đen trắng thích nghi).
+ */
 export function applyFilter(src, filter) {
   if (!filter || filter === 'none') return src;
   const w = src.width;
@@ -296,6 +345,37 @@ export function applyFilter(src, filter) {
   const img = ctx.getImageData(0, 0, w, h);
   const d = img.data;
   const n = w * h;
+
+  if (filter === 'magic' || filter === 'bw') {
+    const bg = flattenLighting(ctx, w, h);
+    for (let i = 0; i < n * 4; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        const v = (d[i + c] * 255) / Math.max(40, bg[i + c]);
+        // Đẩy nền về trắng, giữ chữ đậm (đường cong gamma nhẹ)
+        d[i + c] = v >= 235 ? 255 : Math.pow(v / 255, 1.35) * 255;
+      }
+    }
+    if (filter === 'magic') {
+      // Tăng bão hòa nhẹ để con dấu đỏ, chữ ký xanh nổi bật
+      for (let i = 0; i < n * 4; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+        if (mn > 212) {
+          // Gần trắng → trắng tinh (xóa ám màu, viền màu ở mép giấy)
+          d[i] = d[i + 1] = d[i + 2] = 255;
+        } else if (mx - mn < 28) {
+          // Chữ đen/xám: bỏ ám màu
+          const l = 0.299 * r + 0.587 * g + 0.114 * b;
+          d[i] = d[i + 1] = d[i + 2] = l;
+        } else {
+          const l = 0.299 * r + 0.587 * g + 0.114 * b;
+          for (let c = 0; c < 3; c++) d[i + c] = l + (d[i + c] - l) * 1.25;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+      return out;
+    }
+  }
 
   const lum = new Float32Array(n);
   for (let i = 0; i < n; i++) lum[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
@@ -368,11 +448,83 @@ export function applyFilter(src, filter) {
   return out;
 }
 
-/** Chạy toàn bộ pipeline cho một trang. */
-export function processPage(page) {
-  const cropped = warpQuad(page.source, page.corners);
+/** Chạy toàn bộ pipeline (cắt → xoay → lọc) trên một ảnh nguồn. */
+export function processPage(source, page) {
+  const cropped = warpQuad(source, page.corners);
   const rotated = rotateCanvas(cropped, page.rotation);
   return applyFilter(rotated, page.filter);
+}
+
+export async function blobToCanvas(blob) {
+  const bmp = await createImageBitmap(blob);
+  const c = makeCanvas(bmp.width, bmp.height);
+  c.getContext('2d').drawImage(bmp, 0, 0);
+  bmp.close?.();
+  return c;
+}
+
+/** Độ nét: phương sai của Laplacian trên ảnh xám thu nhỏ (càng lớn càng nét). */
+export function sharpnessScore(canvas) {
+  const small = scaleCanvas(canvas, 640);
+  const w = small.width;
+  const h = small.height;
+  const d = small.getContext('2d').getImageData(0, 0, w, h).data;
+  const g = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+  let sum = 0;
+  let sum2 = 0;
+  let n = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      const l = 4 * g[i] - g[i - 1] - g[i + 1] - g[i - w] - g[i + w];
+      sum += l;
+      sum2 += l * l;
+      n++;
+    }
+  }
+  const mean = sum / n;
+  return sum2 / n - mean * mean;
+}
+
+/** Dấu vân tay ảnh (average hash 8x8) để phát hiện tài liệu trùng. */
+export function imageHash(canvas) {
+  const c = makeCanvas(8, 8);
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(canvas, 0, 0, 8, 8);
+  const d = ctx.getImageData(0, 0, 8, 8).data;
+  const g = [];
+  for (let i = 0; i < 64; i++) g.push(0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]);
+  const avg = g.reduce((a, b) => a + b, 0) / 64;
+  return g.map((v) => (v > avg ? '1' : '0')).join('');
+}
+
+export function hashDistance(a, b) {
+  if (!a || !b || a.length !== b.length) return 64;
+  let n = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) n++;
+  return n;
+}
+
+/** Đóng dấu chìm chéo trang (ví dụ "BẢN SAO – CHỈ DÙNG ĐỂ NỘP HỒ SƠ VISA"). */
+export function drawWatermark(canvas, text) {
+  if (!text) return canvas;
+  const c = makeCanvas(canvas.width, canvas.height);
+  const ctx = c.getContext('2d');
+  ctx.drawImage(canvas, 0, 0);
+  const size = Math.round(Math.max(c.width, c.height) / 28);
+  ctx.save();
+  ctx.translate(c.width / 2, c.height / 2);
+  ctx.rotate(-Math.atan2(c.height, c.width));
+  ctx.font = `700 ${size}px Roboto, Arial, sans-serif`;
+  ctx.fillStyle = 'rgba(200, 30, 30, 0.22)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const diag = Math.hypot(c.width, c.height);
+  for (let y = -diag / 2; y <= diag / 2; y += size * 4) ctx.fillText(text, 0, y);
+  ctx.restore();
+  return c;
 }
 
 export function canvasToBlob(canvas, type = 'image/jpeg', quality = 0.85) {
