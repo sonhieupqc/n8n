@@ -219,6 +219,9 @@ export function localAnalyze(text, entities = []) {
   const fields = extractFields(text);
   const title = (lines.find((l) => l === l.toUpperCase() && /[A-ZÀ-Ỹ]{3}/.test(l) && l.length < 80) || lines[0] || type).slice(0, 80);
   const deadlines = findDeadlines(text);
+  // Ngày đã là mốc hạn thì không lặp lại trong danh sách trường
+  for (let i = fields.length - 1; i >= 0; i--)
+    if (fields[i].label === 'Ngày' && deadlines.some((d) => d.date === fields[i].value)) fields.splice(i, 1);
   const date = fields.find((f) => f.label === 'Ngày' && !deadlines.some((d) => d.date === f.value))?.value || '';
   return {
     doc_type: type,
@@ -286,11 +289,55 @@ Các ảnh đính kèm là các trang của MỘT tài liệu (thứ tự như g
 Nếu có phần chữ trích sẵn từ file gốc bên dưới, dùng nó để kiểm tra lại kết quả đọc.`;
 
 let sdkPromise = null;
-async function getClient(apiKey) {
+async function getSdk() {
   sdkPromise ??= import(LIBS.anthropic);
   const mod = await sdkPromise;
-  const Anthropic = mod.default ?? mod.Anthropic;
+  return mod.default ?? mod.Anthropic;
+}
+async function getClient(apiKey) {
+  const Anthropic = await getSdk();
   return new Anthropic({ apiKey, dangerouslyAllowBrowser: true, maxRetries: 2 });
+}
+
+const BILLING = '<a href="https://console.anthropic.com/settings/billing" target="_blank" rel="noopener">console.anthropic.com → Plans &amp; Billing</a>';
+const KEYS = '<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com → API Keys</a>';
+
+/**
+ * Đổi lỗi API thành thông báo tiếng Việt dễ hiểu.
+ * fallback = true khi nên tự chuyển sang OCR trên máy.
+ */
+export async function describeAiError(err) {
+  let A = null;
+  try {
+    A = await getSdk();
+  } catch {}
+  const raw = String(err?.error?.error?.message || err?.message || err || '');
+  if (!A) {
+    return navigator.onLine
+      ? { message: 'Không tải được thư viện AI Claude.', help: 'Kiểm tra kết nối mạng rồi thử lại.', fallback: true }
+      : { message: 'Không có mạng – AI Claude cần Internet.', fallback: true };
+  }
+  if (A.AuthenticationError && err instanceof A.AuthenticationError)
+    return { message: 'API key không đúng hoặc đã bị xóa.', help: `Tạo key mới tại ${KEYS} rồi dán vào Cài đặt.`, fallback: true };
+  if (A.PermissionDeniedError && err instanceof A.PermissionDeniedError)
+    return { message: 'API key không có quyền dùng model này.', help: 'Vào Cài đặt chọn model khác (ví dụ Claude Sonnet 5).', fallback: true };
+  if (A.RateLimitError && err instanceof A.RateLimitError)
+    return { message: 'Gửi quá nhiều yêu cầu trong thời gian ngắn.', help: 'Đợi khoảng 1 phút rồi thử lại.', fallback: true };
+  if (A.BadRequestError && err instanceof A.BadRequestError) {
+    // API chỉ phân biệt lỗi hết tiền qua nội dung thông báo
+    if (/credit balance/i.test(raw))
+      return {
+        message: 'Tài khoản Anthropic API đã hết tiền (credit).',
+        help: `Nạp thêm tại ${BILLING}. Lưu ý: gói Claude Pro/Max dùng trên web không bao gồm tiền API.`,
+        fallback: true,
+      };
+    return { message: 'Yêu cầu không hợp lệ: ' + raw.slice(0, 200), fallback: true };
+  }
+  if (A.InternalServerError && err instanceof A.InternalServerError)
+    return { message: 'Máy chủ Claude đang quá tải hoặc gặp sự cố.', help: 'Thử lại sau ít phút.', fallback: true };
+  if (A.APIConnectionError && err instanceof A.APIConnectionError)
+    return { message: navigator.onLine ? 'Không kết nối được tới Claude.' : 'Không có mạng – AI Claude cần Internet.', fallback: true };
+  return { message: raw.slice(0, 300) || 'Lỗi không xác định', fallback: /API key/.test(raw) };
 }
 
 async function toBase64Jpeg(img) {

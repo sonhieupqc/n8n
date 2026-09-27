@@ -69,17 +69,15 @@
           <button class="btn ghost small" id="btnClearPages">Xóa hết</button>
         </div>
         <div id="pages" class="pages"></div>
-        <div class="row wrap gap">
-          <label class="lbl inline">Bộ lọc cho tất cả:
-            <select id="filterAll">
-              <option value="">— giữ nguyên —</option>
-              <option value="magic">✨ Tự động (khử bóng)</option>
-              <option value="enhance">Làm nét + tương phản</option>
-              <option value="gray">Thang xám</option>
-              <option value="bw">Đen trắng (tài liệu)</option>
-              <option value="none">Ảnh gốc</option>
-            </select>
-          </label>
+        <div class="filter-bar">
+          <span class="filter-label">Bộ lọc cho tất cả trang:</span>
+          <div class="chips" id="filterChips" role="radiogroup" aria-label="Bộ lọc">
+            <button class="fchip" data-f="magic" role="radio">✨ Tự động</button>
+            <button class="fchip" data-f="enhance" role="radio">🔆 Làm nét</button>
+            <button class="fchip" data-f="gray" role="radio">⚪ Xám</button>
+            <button class="fchip" data-f="bw" role="radio">⚫ Đen trắng</button>
+            <button class="fchip" data-f="none" role="radio">🖼 Gốc</button>
+          </div>
           <button class="btn ghost small" id="btnAutoAll">✂️ Tự cắt tất cả</button>
         </div>
       </div>
@@ -92,6 +90,7 @@
           <button class="btn accent" id="btnClaude">✨ AI Claude (thông minh nhất)</button>
         </div>
         <div id="aiProgress" class="progress" hidden><div class="bar"></div><span class="txt"></span></div>
+        <div id="aiError" class="note warn" hidden></div>
         <div id="aiResult" hidden>
           <div id="sensitiveNote" class="note warn" hidden>🔒 Tài liệu có thông tin nhạy cảm – nên đặt mật khẩu PDF ở bước 4.</div>
           <div id="dupNote" class="note" hidden></div>

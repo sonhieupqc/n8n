@@ -12,7 +12,7 @@ import {
   sharpnessScore,
 } from './imaging.js';
 import { LIBS, excelToPages, fileKind, loadScript, pdfToPages, textToPages, wordToPages } from './converters.js';
-import { DOC_TYPES, askDocument, claudeAnalyze, fold, localAnalyze, ocrImages, parseEntities } from './ai.js';
+import { DOC_TYPES, askDocument, claudeAnalyze, describeAiError, fold, localAnalyze, ocrImages, parseEntities } from './ai.js';
 import { buildPdf } from './pdfbuild.js';
 import {
   buildIcs,
@@ -61,6 +61,8 @@ function loadSettings() {
   try {
     const s = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('pdfscanner.settings') || '{}') };
     if (s.subfolder === false && !s.driveStructureSet) s.driveStructure = 'none';
+    // Bản đầu tiên lưu sẵn bộ lọc "Làm nét" – chuyển sang bộ lọc "Tự động" mới
+    if (!s.ver && s.filter === 'enhance') s.filter = 'magic';
     return s;
   } catch {
     return { ...DEFAULTS };
@@ -68,7 +70,7 @@ function loadSettings() {
 }
 function storeSettings() {
   try {
-    localStorage.setItem('pdfscanner.settings', JSON.stringify({ ...settings, driveStructureSet: true }));
+    localStorage.setItem('pdfscanner.settings', JSON.stringify({ ...settings, driveStructureSet: true, ver: 2 }));
   } catch {}
 }
 const entities = () => parseEntities(settings.entities);
@@ -308,6 +310,7 @@ function renderPages() {
       <span class="no">${i + 1}</span>
       ${p.blurry ? '<span class="warnb" title="Ảnh có thể bị mờ">⚠ mờ</span>' : ''}
       <img src="${p.thumb}" alt="Trang ${i + 1}" />
+      <span class="fname">${FILTER_NAMES[p.filter] || ''}</span>
       <div class="acts">
         <button data-a="left" title="Lên trước">◀</button>
         <button data-a="edit" title="Chỉnh sửa">✏️</button>
@@ -350,6 +353,7 @@ function renderPages() {
   if (!has) $('#aiResult').hidden = true;
   setStep(!has ? 1 : state.analysis ? 3 : 2);
   if (has && !state.fileNameTouched) $('#fileName').value = defaultFileName();
+  syncFilterChips();
 }
 
 $('#btnClearPages').addEventListener('click', () => {
@@ -370,19 +374,47 @@ function resetScan() {
   renderPages();
 }
 
-$('#filterAll').addEventListener('change', async (e) => {
-  const f = e.target.value;
-  if (!f) return;
-  e.target.value = '';
-  const prog = $('#importProgress');
-  for (const [i, p] of state.pages.entries()) {
-    progress(prog, i / state.pages.length, `Áp bộ lọc trang ${i + 1}/${state.pages.length}`);
-    p.filter = f;
-    await refreshThumb(p);
-    saveDraft(p);
+const FILTER_NAMES = { magic: 'Tự động', enhance: 'Làm nét', gray: 'Xám', bw: 'Đen trắng', none: 'Gốc' };
+
+function syncFilterChips() {
+  const used = new Set(state.pages.map((p) => p.filter));
+  const one = used.size === 1 ? [...used][0] : null;
+  $$('#filterChips .fchip').forEach((c) => {
+    c.classList.toggle('on', c.dataset.f === one);
+    c.setAttribute('aria-checked', String(c.dataset.f === one));
+  });
+}
+
+$('#filterChips').addEventListener('click', async (e) => {
+  const chip = e.target.closest('.fchip');
+  if (!chip || chip.disabled || !state.pages.length) return;
+  const f = chip.dataset.f;
+  const chips = $$('#filterChips .fchip');
+  chips.forEach((c) => {
+    c.disabled = true;
+    c.classList.toggle('on', c === chip);
+  });
+  const els = $$('#pages .page');
+  els.forEach((el) => el.classList.add('busy'));
+  try {
+    for (const [i, p] of state.pages.entries()) {
+      if (p.filter !== f) {
+        p.filter = f;
+        await refreshThumb(p);
+        saveDraft(p);
+        const img = els[i]?.querySelector('img');
+        if (img) img.src = p.thumb;
+      }
+      els[i]?.classList.remove('busy');
+    }
+    state.analysis = null;
+    toast(`Đã áp dụng bộ lọc “${FILTER_NAMES[f]}” cho ${state.pages.length} trang`);
+  } catch (err) {
+    toast('Lỗi áp bộ lọc: ' + err.message, 5000);
+  } finally {
+    chips.forEach((c) => (c.disabled = false));
+    renderPages();
   }
-  prog.hidden = true;
-  renderPages();
 });
 
 $('#btnAutoAll').addEventListener('click', async () => {
@@ -742,9 +774,10 @@ $('#btnOcr').addEventListener('click', () => runAi('local'));
 $('#btnClaude').addEventListener('click', () => runAi('claude'));
 
 let aiRunning = false;
-async function runAi(mode) {
+async function runAi(mode, { keepError = false } = {}) {
   if (!state.pages.length || aiRunning) return;
   aiRunning = true;
+  if (!keepError) $('#aiError').hidden = true;
   const prog = $('#aiProgress');
   const btns = [$('#btnOcr'), $('#btnClaude')];
   btns.forEach((b) => (b.disabled = true));
@@ -777,12 +810,27 @@ async function runAi(mode) {
     toast(mode === 'claude' ? '✨ Claude đã đọc xong tài liệu' : 'Đã nhận dạng xong');
   } catch (err) {
     console.error(err);
-    toast('Lỗi AI: ' + (err.message || err), 6000);
-  } finally {
+    const info = mode === 'claude' ? await describeAiError(err) : { message: err.message || String(err) };
     prog.hidden = true;
     btns.forEach((b) => (b.disabled = false));
     aiRunning = false;
+    showAiError(info.message, info.help);
+    // Claude không dùng được (hết tiền, sai key, mất mạng…) → tự đọc bằng OCR trên máy
+    if (mode === 'claude' && info.fallback) {
+      toast('Đang chuyển sang OCR trên máy…', 3000);
+      return runAi('local', { keepError: true });
+    }
+    return;
   }
+  prog.hidden = true;
+  btns.forEach((b) => (b.disabled = false));
+  aiRunning = false;
+}
+
+function showAiError(message, help) {
+  const box = $('#aiError');
+  box.innerHTML = `⚠️ ${escapeHtml(message)}${help ? `<br><small>${help}</small>` : ''}`;
+  box.hidden = false;
 }
 
 /** OCR các trang chưa có kết quả (dùng cho phân tích và cho lớp chữ PDF). */
@@ -1311,8 +1359,9 @@ async function ask(question) {
     wait.className = 'msg-a';
     wait.textContent = answer;
   } catch (err) {
+    const info = await describeAiError(err);
     wait.className = 'msg-a';
-    wait.textContent = '❌ ' + err.message;
+    wait.innerHTML = '❌ ' + escapeHtml(info.message) + (info.help ? `<br><small>${info.help}</small>` : '');
   } finally {
     $('#chatSend').disabled = false;
   }

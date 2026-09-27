@@ -1,5 +1,5 @@
 // Service worker: cho phép mở app khi không có mạng và lưu đệm thư viện từ CDN.
-const VERSION = 'pdf-scanner-v2';
+const VERSION = 'pdf-scanner-v3';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'imaging.js', 'converters.js', 'ai.js', 'storage.js', 'pdfbuild.js', 'manifest.webmanifest', 'icon.svg'];
 const SHARE_CACHE = 'pdf-scanner-share';
 
