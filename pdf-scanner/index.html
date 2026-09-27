@@ -85,9 +85,10 @@
       <!-- Bước 3: AI -->
       <div class="card" id="aiCard" hidden>
         <h2>3. AI đọc &amp; hiểu tài liệu</h2>
+        <p class="hint" id="aiModeHint" style="margin:0 0 10px"></p>
         <div class="row wrap gap">
-          <button class="btn" id="btnOcr">🔎 OCR trên máy (miễn phí)</button>
-          <button class="btn accent" id="btnClaude">✨ AI Claude (thông minh nhất)</button>
+          <button class="btn primary" id="btnOcr">🔎 Đọc &amp; phân tích (miễn phí)</button>
+          <button class="btn accent" id="btnCloud" hidden>✨ AI Gemini</button>
         </div>
         <div id="aiProgress" class="progress" hidden><div class="bar"></div><span class="txt"></span></div>
         <div id="aiError" class="note warn" hidden></div>
@@ -213,20 +214,47 @@
     <!-- ================= TAB: CÀI ĐẶT ================= -->
     <section id="tab-settings" class="tab">
       <div class="card">
-        <h2>✨ AI Claude</h2>
-        <p class="hint">Dùng AI Claude để đọc chữ (kể cả chữ viết tay, bảng biểu, con dấu), phân loại, trích xuất, tìm hạn và hỏi đáp với tài liệu. Lấy API key tại <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a>.</p>
-        <label class="lbl">Anthropic API key
-          <input id="setApiKey" type="password" placeholder="sk-ant-…" autocomplete="off" />
-        </label>
-        <label class="lbl">Model
-          <select id="setModel">
-            <option value="claude-opus-5">Claude Opus 5 (khuyên dùng – chính xác nhất)</option>
-            <option value="claude-sonnet-5">Claude Sonnet 5 (nhanh, rẻ hơn)</option>
-            <option value="claude-haiku-4-5">Claude Haiku 4.5 (rẻ nhất)</option>
+        <h2>🧠 Chế độ AI</h2>
+        <label class="lbl">Chọn cách app đọc &amp; hiểu tài liệu
+          <select id="setProvider">
+            <option value="local">🔒 Chỉ trên máy – miễn phí, riêng tư, không cần mạng</option>
+            <option value="gemini">✨ Google Gemini – miễn phí (giới hạn lượt/ngày), thông minh hơn</option>
+            <option value="claude">💳 Claude – trả phí theo lượt dùng, chính xác nhất</option>
           </select>
         </label>
-        <label><input type="checkbox" id="setAutoAi" /> Tự chạy AI Claude khi thêm trang xong</label>
-        <p class="warn">⚠️ Key được lưu trong bộ nhớ trình duyệt của máy này. Không dùng trên máy dùng chung.</p>
+
+        <div id="provLocal" class="prov">
+          <p class="hint">OCR tiếng Việt chạy ngay trên điện thoại: đọc chữ in, phân loại, trích xuất số hóa đơn, MST, số tiền, tìm hạn. Không gửi dữ liệu đi đâu, không tốn tiền. Chữ viết tay và hỏi đáp AI cần chọn Gemini.</p>
+        </div>
+
+        <div id="provGemini" class="prov" hidden>
+          <p class="hint"><b>Cách lấy key miễn phí (1 phút):</b> mở <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> → đăng nhập Gmail → bấm <b>Create API key</b> → sao chép và dán vào ô dưới. Không cần thẻ thanh toán.</p>
+          <label class="lbl">Gemini API key
+            <input id="setGeminiKey" type="password" placeholder="AIza…" autocomplete="off" />
+          </label>
+          <label class="lbl">Model (để trống để app tự chọn bản mới nhất)
+            <input id="setGeminiModel" type="text" placeholder="tự chọn" autocomplete="off" />
+          </label>
+          <label><input type="checkbox" id="setGuard" checked /> 🔒 Không gửi tài liệu nhạy cảm (CCCD, hộ chiếu, sao kê, y tế) lên Google – chỉ đọc trên máy</label>
+          <p class="warn">ℹ️ Ở gói miễn phí, Google có thể dùng nội dung gửi lên để cải thiện sản phẩm. Vì vậy nên giữ ô bảo vệ ở trên luôn bật.</p>
+        </div>
+
+        <div id="provClaude" class="prov" hidden>
+          <p class="hint">Cần tài khoản API tại <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> đã nạp tiền (tính phí riêng, không nằm trong gói Claude Pro/Max).</p>
+          <label class="lbl">Anthropic API key
+            <input id="setApiKey" type="password" placeholder="sk-ant-…" autocomplete="off" />
+          </label>
+          <label class="lbl">Model
+            <select id="setModel">
+              <option value="claude-opus-5">Claude Opus 5 (chính xác nhất)</option>
+              <option value="claude-sonnet-5">Claude Sonnet 5 (nhanh, rẻ hơn)</option>
+              <option value="claude-haiku-4-5">Claude Haiku 4.5 (rẻ nhất)</option>
+            </select>
+          </label>
+        </div>
+
+        <label id="autoAiRow"><input type="checkbox" id="setAutoAi" /> Tự đọc &amp; phân tích ngay sau khi quét xong</label>
+        <p class="warn" id="keyWarn" hidden>⚠️ Key được lưu trong bộ nhớ trình duyệt của máy này. Không dùng trên máy dùng chung.</p>
       </div>
       <div class="card">
         <h2>🏢 Đơn vị / chủ sở hữu</h2>

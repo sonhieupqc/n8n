@@ -22,13 +22,27 @@ App là các file tĩnh (HTML/JS/CSS), không cần máy chủ riêng. Camera v�
 
 Trên điện thoại: mở link → menu trình duyệt → **Thêm vào màn hình chính / Cài đặt ứng dụng**.
 
-## Cấu hình AI Claude (tùy chọn)
+## Chế độ AI – mặc định MIỄN PHÍ
 
-1. Tạo API key tại https://console.anthropic.com → *API Keys*.
-2. Trong app: **Cài đặt → AI Claude** → dán key, chọn model (mặc định Claude Opus 5, chính xác nhất; Sonnet 5 / Haiku 4.5 rẻ hơn).
-3. Ở bước 3 bấm **✨ AI Claude**. Mỗi lần gửi tối đa 20 trang.
+Vào **Cài đặt → Chế độ AI** để chọn:
 
-> Key chỉ lưu trong trình duyệt của máy anh và được gửi thẳng tới Anthropic. Không nên nhập key trên máy dùng chung.
+| Chế độ | Chi phí | Làm được gì |
+|---|---|---|
+| 🔒 **Chỉ trên máy** (mặc định) | Miễn phí, không cần mạng | OCR tiếng Việt chữ in, phân loại, trích xuất số hóa đơn/MST/số tiền, tìm hạn, PDF tìm kiếm được. Dữ liệu không rời khỏi điện thoại. |
+| ✨ **Google Gemini** | Miễn phí (giới hạn số lượt mỗi phút/ngày theo chính sách Google) | Thêm: đọc chữ viết tay, bảng biểu phức tạp, tóm tắt thông minh, **hỏi đáp & dịch tài liệu**. |
+| 💳 **Claude** | Trả phí theo lượt (tài khoản API riêng) | Chính xác nhất. |
+
+### Lấy key Gemini miễn phí (1 phút)
+
+1. Mở https://aistudio.google.com/apikey và đăng nhập bằng Gmail.
+2. Bấm **Create API key** → sao chép key (bắt đầu bằng `AIza…`).
+3. Trong app: **Cài đặt → Chế độ AI → Google Gemini**, dán key, bấm **Lưu cài đặt**.
+
+Ô *Model* để trống – app tự chọn bản Gemini "flash" mới nhất mà key dùng được.
+
+> 🔒 **Bảo vệ tài liệu nhạy cảm (bật sẵn):** ở gói miễn phí Google có thể dùng nội dung gửi lên để cải thiện sản phẩm. Vì vậy app luôn đọc trên máy trước; nếu thấy CCCD, hộ chiếu, sao kê ngân hàng, hồ sơ y tế… thì **không gửi lên Google** mà chỉ dùng kết quả trên máy.
+>
+> Khi hết lượt miễn phí, sai key hoặc mất mạng, app báo bằng tiếng Việt và tự chuyển sang đọc trên máy.
 
 ## Khai báo đơn vị / chủ sở hữu
 
@@ -63,6 +77,7 @@ pdf-scanner/
 ├── app.js                Điều khiển luồng 4 bước, camera, trình chỉnh trang, thư viện
 ├── imaging.js            Dò mép giấy, nắn phối cảnh, khử bóng, bộ lọc, đo độ nét, vân tay ảnh, dấu chìm
 ├── converters.js         PDF (pdf.js), Word (mammoth), Excel (SheetJS) → trang ảnh + chữ gốc
+├── gemini.js             Google Gemini (miễn phí): phân tích ảnh có cấu trúc, hỏi đáp, tự chọn model, báo lỗi tiếng Việt
 ├── ai.js                 OCR kèm tọa độ chữ, phân loại/trích xuất/tìm hạn theo luật, Claude (Anthropic SDK), hỏi đáp
 ├── pdfbuild.js           Tạo PDF: lớp chữ ẩn (font Roboto tiếng Việt), số trang, dấu chìm, mật khẩu
 ├── storage.js            IndexedDB (thư viện + phiên quét dở), chia sẻ/tải về, Google Drive, lịch .ics

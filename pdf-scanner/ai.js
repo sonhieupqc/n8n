@@ -238,7 +238,7 @@ export function localAnalyze(text, entities = []) {
 }
 
 // ------------------------------------------------------------------ Claude
-function buildSchema(entityNames) {
+export function buildSchema(entityNames) {
   return {
     type: 'object',
     additionalProperties: false,
@@ -279,7 +279,7 @@ function buildSchema(entityNames) {
   };
 }
 
-const PROMPT = `Bạn là trợ lý số hóa và quản lý tài liệu cho một gia đình kinh doanh ở Việt Nam.
+export const PROMPT = `Bạn là trợ lý số hóa và quản lý tài liệu cho một gia đình kinh doanh ở Việt Nam.
 Các ảnh đính kèm là các trang của MỘT tài liệu (thứ tự như gửi). Hãy:
 1. Đọc chính xác toàn bộ chữ (OCR), kể cả bảng biểu, con dấu và chữ viết tay; giữ nguyên dấu tiếng Việt.
 2. Phân loại tài liệu và xác định đơn vị/chủ sở hữu (nếu có danh sách, chọn trong danh sách).
@@ -340,7 +340,7 @@ export async function describeAiError(err) {
   return { message: raw.slice(0, 300) || 'Lỗi không xác định', fallback: /API key/.test(raw) };
 }
 
-async function toBase64Jpeg(img) {
+export async function toBase64Jpeg(img) {
   const canvas = img instanceof Blob ? await blobToCanvas(img) : img;
   const small = scaleCanvas(canvas, 1568);
   const url = small.toDataURL('image/jpeg', 0.85);
@@ -394,11 +394,8 @@ export async function claudeAnalyze({ apiKey, model, images, nativeText, entitie
   return JSON.parse(out);
 }
 
-/** Hỏi đáp về một tài liệu đã lưu. history: [{ role, content }] */
-export async function askDocument({ apiKey, model, doc, question, history = [] }) {
-  if (!apiKey) throw new Error('Chưa nhập Anthropic API key trong phần Cài đặt.');
-  const client = await getClient(apiKey);
-  const context = [
+export function docContext(doc) {
+  return [
     `Tên file: ${doc.name}`,
     `Loại: ${doc.docType}${doc.entity ? ` · Đơn vị: ${doc.entity}` : ''}${doc.date ? ` · Ngày: ${doc.date}` : ''}`,
     doc.title && `Tiêu đề: ${doc.title}`,
@@ -411,6 +408,13 @@ export async function askDocument({ apiKey, model, doc, question, history = [] }
   ]
     .filter((x) => x !== undefined && x !== false)
     .join('\n');
+}
+
+/** Hỏi đáp về một tài liệu đã lưu. history: [{ role, content }] */
+export async function askDocument({ apiKey, model, doc, question, history = [] }) {
+  if (!apiKey) throw new Error('Chưa nhập Anthropic API key trong phần Cài đặt.');
+  const client = await getClient(apiKey);
+  const context = docContext(doc);
   const messages = [
     { role: 'user', content: `<tai_lieu>\n${context}\n</tai_lieu>\n\nHãy trả lời các câu hỏi của tôi về tài liệu này.` },
     { role: 'assistant', content: 'Tôi đã đọc tài liệu. Anh/chị muốn hỏi gì?' },
