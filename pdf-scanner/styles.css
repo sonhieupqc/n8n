@@ -260,3 +260,19 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.7); }
 .toast .act { background: none; border: 0; color: #5eead4; font: inherit; font-weight: 700; cursor: pointer; padding: 0; }
 [hidden] { display: none !important; }
 .fields input { width: 100%; font: inherit; font-size: 14px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+
+.filter-bar { display: flex; flex-direction: column; gap: 8px; }
+.filter-label { font-size: 13px; color: var(--muted); }
+.chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.fchip {
+  flex: none; border: 1.5px solid var(--line); background: var(--card); color: var(--text);
+  font: inherit; font-size: 14px; font-weight: 600; border-radius: 99px; padding: 8px 14px; cursor: pointer;
+}
+.fchip.on { background: var(--primary); color: var(--primary-ink); border-color: var(--primary); }
+.fchip:disabled { opacity: 0.6; }
+.filter-bar #btnAutoAll { align-self: flex-start; }
+.page .fname {
+  position: absolute; left: 0; right: 0; bottom: 30px; text-align: center; font-size: 10px; font-weight: 700;
+  color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.8);
+}

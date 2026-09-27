@@ -12,7 +12,8 @@ import {
   sharpnessScore,
 } from './imaging.js';
 import { LIBS, excelToPages, fileKind, loadScript, pdfToPages, textToPages, wordToPages } from './converters.js';
-import { DOC_TYPES, askDocument, claudeAnalyze, fold, localAnalyze, ocrImages, parseEntities } from './ai.js';
+import { DOC_TYPES, askDocument, claudeAnalyze, describeAiError, docContext, fold, isSensitive, localAnalyze, ocrImages, parseEntities } from './ai.js';
+import { describeGeminiError, geminiAnalyze, geminiAsk } from './gemini.js';
 import { buildPdf } from './pdfbuild.js';
 import {
   buildIcs,
@@ -43,6 +44,10 @@ const state = {
 };
 
 const DEFAULTS = {
+  provider: 'local', // local | gemini | claude
+  geminiKey: '',
+  geminiModel: '',
+  guard: true,
   apiKey: '',
   model: 'claude-opus-5',
   autoAi: false,
@@ -61,6 +66,10 @@ function loadSettings() {
   try {
     const s = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('pdfscanner.settings') || '{}') };
     if (s.subfolder === false && !s.driveStructureSet) s.driveStructure = 'none';
+    // Bản đầu tiên lưu sẵn bộ lọc "Làm nét" – chuyển sang bộ lọc "Tự động" mới
+    if (!s.ver && s.filter === 'enhance') s.filter = 'magic';
+    // Mặc định dùng chế độ miễn phí trên máy
+    if (!s.provider) s.provider = 'local';
     return s;
   } catch {
     return { ...DEFAULTS };
@@ -68,7 +77,7 @@ function loadSettings() {
 }
 function storeSettings() {
   try {
-    localStorage.setItem('pdfscanner.settings', JSON.stringify({ ...settings, driveStructureSet: true }));
+    localStorage.setItem('pdfscanner.settings', JSON.stringify({ ...settings, driveStructureSet: true, ver: 3 }));
   } catch {}
 }
 const entities = () => parseEntities(settings.entities);
@@ -212,7 +221,7 @@ async function importFiles(files) {
   prog.hidden = true;
   if (added) {
     toast(`Đã thêm ${added} trang`);
-    if (settings.autoAi && settings.apiKey && navigator.onLine) runAi('claude');
+    if (settings.autoAi) runAi(cloudReady() ? 'cloud' : 'local');
   }
 }
 
@@ -308,6 +317,7 @@ function renderPages() {
       <span class="no">${i + 1}</span>
       ${p.blurry ? '<span class="warnb" title="Ảnh có thể bị mờ">⚠ mờ</span>' : ''}
       <img src="${p.thumb}" alt="Trang ${i + 1}" />
+      <span class="fname">${FILTER_NAMES[p.filter] || ''}</span>
       <div class="acts">
         <button data-a="left" title="Lên trước">◀</button>
         <button data-a="edit" title="Chỉnh sửa">✏️</button>
@@ -350,6 +360,7 @@ function renderPages() {
   if (!has) $('#aiResult').hidden = true;
   setStep(!has ? 1 : state.analysis ? 3 : 2);
   if (has && !state.fileNameTouched) $('#fileName').value = defaultFileName();
+  syncFilterChips();
 }
 
 $('#btnClearPages').addEventListener('click', () => {
@@ -370,19 +381,47 @@ function resetScan() {
   renderPages();
 }
 
-$('#filterAll').addEventListener('change', async (e) => {
-  const f = e.target.value;
-  if (!f) return;
-  e.target.value = '';
-  const prog = $('#importProgress');
-  for (const [i, p] of state.pages.entries()) {
-    progress(prog, i / state.pages.length, `Áp bộ lọc trang ${i + 1}/${state.pages.length}`);
-    p.filter = f;
-    await refreshThumb(p);
-    saveDraft(p);
+const FILTER_NAMES = { magic: 'Tự động', enhance: 'Làm nét', gray: 'Xám', bw: 'Đen trắng', none: 'Gốc' };
+
+function syncFilterChips() {
+  const used = new Set(state.pages.map((p) => p.filter));
+  const one = used.size === 1 ? [...used][0] : null;
+  $$('#filterChips .fchip').forEach((c) => {
+    c.classList.toggle('on', c.dataset.f === one);
+    c.setAttribute('aria-checked', String(c.dataset.f === one));
+  });
+}
+
+$('#filterChips').addEventListener('click', async (e) => {
+  const chip = e.target.closest('.fchip');
+  if (!chip || chip.disabled || !state.pages.length) return;
+  const f = chip.dataset.f;
+  const chips = $$('#filterChips .fchip');
+  chips.forEach((c) => {
+    c.disabled = true;
+    c.classList.toggle('on', c === chip);
+  });
+  const els = $$('#pages .page');
+  els.forEach((el) => el.classList.add('busy'));
+  try {
+    for (const [i, p] of state.pages.entries()) {
+      if (p.filter !== f) {
+        p.filter = f;
+        await refreshThumb(p);
+        saveDraft(p);
+        const img = els[i]?.querySelector('img');
+        if (img) img.src = p.thumb;
+      }
+      els[i]?.classList.remove('busy');
+    }
+    state.analysis = null;
+    toast(`Đã áp dụng bộ lọc “${FILTER_NAMES[f]}” cho ${state.pages.length} trang`);
+  } catch (err) {
+    toast('Lỗi áp bộ lọc: ' + err.message, 5000);
+  } finally {
+    chips.forEach((c) => (c.disabled = false));
+    renderPages();
   }
-  prog.hidden = true;
-  renderPages();
 });
 
 $('#btnAutoAll').addEventListener('click', async () => {
@@ -722,7 +761,7 @@ $('#camClose').addEventListener('click', () => $('#camera').close());
 $('#camera').addEventListener('close', () => {
   stopStream();
   cam.torch = false;
-  if (cam.count && settings.autoAi && settings.apiKey && navigator.onLine) runAi('claude');
+  if (cam.count && settings.autoAi) runAi(cloudReady() ? 'cloud' : 'local');
 });
 
 // ------------------------------------------------------------------ Bước 3: AI
@@ -739,19 +778,69 @@ function fillEntityList() {
 fillEntityList();
 
 $('#btnOcr').addEventListener('click', () => runAi('local'));
-$('#btnClaude').addEventListener('click', () => runAi('claude'));
+$('#btnCloud').addEventListener('click', () => runAi('cloud'));
+
+const PROVIDER_NAME = { gemini: 'Gemini', claude: 'Claude' };
+function cloudReady() {
+  if (!navigator.onLine) return false;
+  if (settings.provider === 'gemini') return !!settings.geminiKey;
+  if (settings.provider === 'claude') return !!settings.apiKey;
+  return false;
+}
+
+/** Nút & dòng mô tả ở bước 3 theo chế độ AI đang chọn. */
+function updateAiUi() {
+  const p = settings.provider;
+  const cloud = $('#btnCloud');
+  cloud.hidden = p === 'local';
+  cloud.textContent = p === 'gemini' ? '✨ AI Gemini (miễn phí)' : '✨ AI Claude (trả phí)';
+  $('#aiModeHint').innerHTML =
+    p === 'local'
+      ? '🔒 Chế độ miễn phí: đọc chữ ngay trên máy, không gửi dữ liệu đi đâu. Muốn đọc chữ viết tay và hỏi đáp AI, bật <b>Gemini (miễn phí)</b> trong Cài đặt.'
+      : p === 'gemini'
+        ? `✨ Gemini miễn phí${settings.geminiKey ? '' : ' – <b>chưa nhập key</b> trong Cài đặt'}.${settings.guard ? ' Tài liệu nhạy cảm chỉ đọc trên máy.' : ''}`
+        : `💳 Claude trả phí${settings.apiKey ? '' : ' – <b>chưa nhập key</b> trong Cài đặt'}.`;
+}
 
 let aiRunning = false;
-async function runAi(mode) {
+async function runAi(mode, { keepError = false } = {}) {
   if (!state.pages.length || aiRunning) return;
   aiRunning = true;
+  if (!keepError) $('#aiError').hidden = true;
   const prog = $('#aiProgress');
-  const btns = [$('#btnOcr'), $('#btnClaude')];
+  const btns = [$('#btnOcr'), $('#btnCloud')];
   btns.forEach((b) => (b.disabled = true));
+  const provider = mode === 'cloud' ? settings.provider : 'local';
+  const done = () => {
+    prog.hidden = true;
+    btns.forEach((b) => (b.disabled = false));
+    aiRunning = false;
+  };
   try {
     const nativeText = state.pages.filter((p) => p.digital && p.text).map((p) => p.text).join('\n\n');
     let result;
-    if (mode === 'claude') {
+    let guarded = false;
+    if (provider === 'gemini') {
+      // Đọc trên máy trước (miễn phí) để kiểm tra độ nhạy cảm trước khi gửi lên Google
+      await ensureOcr(state.pages.filter((p) => !p.digital), (f, t) => progress(prog, f * 0.4, 'Kiểm tra trên máy: ' + t));
+      const local = localAnalyze(combinedText(), entities());
+      if (settings.guard && (local.sensitive || isSensitive(local.full_text, local.doc_type))) {
+        result = local;
+        guarded = true;
+      } else {
+        const images = [];
+        for (const p of state.pages) images.push(await getProcessed(p));
+        result = await geminiAnalyze({
+          key: settings.geminiKey,
+          model: settings.geminiModel,
+          images,
+          nativeText: combinedText(),
+          entities: entities(),
+          onProgress: (f, t) => progress(prog, 0.4 + f * 0.6, t),
+        });
+        if (!result.full_text) result.full_text = combinedText();
+      }
+    } else if (provider === 'claude') {
       if (!settings.apiKey) throw new Error('Chưa nhập Anthropic API key trong phần Cài đặt.');
       const images = [];
       for (const [i, p] of state.pages.entries()) {
@@ -772,17 +861,31 @@ async function runAi(mode) {
     }
     state.analysis = result;
     showAnalysis(result);
+    if (guarded) showAiError('Tài liệu có thông tin nhạy cảm nên chỉ được đọc trên máy, không gửi lên Google.', 'Có thể tắt bảo vệ này trong Cài đặt → Chế độ AI nếu anh muốn.', 'info');
     await checkDuplicate(result.full_text);
     setStep(3);
-    toast(mode === 'claude' ? '✨ Claude đã đọc xong tài liệu' : 'Đã nhận dạng xong');
+    toast(provider === 'local' || guarded ? 'Đã đọc xong (miễn phí trên máy)' : `✨ ${PROVIDER_NAME[provider]} đã đọc xong tài liệu`);
   } catch (err) {
     console.error(err);
-    toast('Lỗi AI: ' + (err.message || err), 6000);
-  } finally {
-    prog.hidden = true;
-    btns.forEach((b) => (b.disabled = false));
-    aiRunning = false;
+    const info =
+      provider === 'gemini' ? describeGeminiError(err) : provider === 'claude' ? await describeAiError(err) : { message: err.message || String(err) };
+    done();
+    showAiError(info.message, info.help);
+    // AI trên mạng không dùng được (hết lượt, sai key, mất mạng…) → tự đọc bằng OCR trên máy
+    if (provider !== 'local' && info.fallback) {
+      toast('Đang chuyển sang đọc trên máy (miễn phí)…', 3000);
+      return runAi('local', { keepError: true });
+    }
+    return;
   }
+  done();
+}
+
+function showAiError(message, help, kind = 'warn') {
+  const box = $('#aiError');
+  box.className = kind === 'info' ? 'note' : 'note warn';
+  box.innerHTML = `${kind === 'info' ? '🔒' : '⚠️'} ${escapeHtml(message)}${help ? `<br><small>${help}</small>` : ''}`;
+  box.hidden = false;
 }
 
 /** OCR các trang chưa có kết quả (dùng cho phân tích và cho lớp chữ PDF). */
@@ -1306,13 +1409,30 @@ async function ask(question) {
   const wait = chatBubble('msg-a wait', 'Đang suy nghĩ…');
   $('#chatSend').disabled = true;
   try {
-    const answer = await askDocument({ apiKey: settings.apiKey, model: settings.model, doc: readDocForm(), question, history: dlg.history });
+    const doc = readDocForm();
+    let answer;
+    if (settings.provider === 'gemini') {
+      if (settings.guard && (doc.sensitive || isSensitive(doc.text || '', doc.docType)))
+        throw Object.assign(new Error('guard'), { friendly: {
+          message: 'Tài liệu nhạy cảm – không gửi lên Google để hỏi đáp.',
+          help: 'Có thể tắt bảo vệ trong Cài đặt → Chế độ AI nếu anh vẫn muốn hỏi.',
+        } });
+      answer = await geminiAsk({ key: settings.geminiKey, model: settings.geminiModel, context: docContext(doc), question, history: dlg.history });
+    } else if (settings.provider === 'claude') {
+      answer = await askDocument({ apiKey: settings.apiKey, model: settings.model, doc, question, history: dlg.history });
+    } else {
+      throw Object.assign(new Error('local'), { friendly: {
+        message: 'Hỏi đáp cần AI trên mạng.',
+        help: 'Vào Cài đặt → Chế độ AI → chọn <b>Google Gemini (miễn phí)</b> và nhập key miễn phí.',
+      } });
+    }
     dlg.history.push({ role: 'user', content: question }, { role: 'assistant', content: answer });
     wait.className = 'msg-a';
     wait.textContent = answer;
   } catch (err) {
+    const info = err.friendly || (settings.provider === 'gemini' ? describeGeminiError(err) : await describeAiError(err));
     wait.className = 'msg-a';
-    wait.textContent = '❌ ' + err.message;
+    wait.innerHTML = '❌ ' + escapeHtml(info.message) + (info.help ? `<br><small>${info.help}</small>` : '');
   } finally {
     $('#chatSend').disabled = false;
   }
@@ -1322,7 +1442,21 @@ $('#chatInput').addEventListener('keydown', (e) => e.key === 'Enter' && ask(e.ta
 $$('#docDlg .quick .chip-btn').forEach((b) => b.addEventListener('click', () => ask(b.textContent)));
 
 // ------------------------------------------------------------------ Cài đặt
+function showProviderFields() {
+  const p = $('#setProvider').value;
+  $('#provLocal').hidden = p !== 'local';
+  $('#provGemini').hidden = p !== 'gemini';
+  $('#provClaude').hidden = p !== 'claude';
+  $('#keyWarn').hidden = p === 'local';
+}
+$('#setProvider').addEventListener('change', showProviderFields);
+
 function fillSettings() {
+  $('#setProvider').value = settings.provider;
+  $('#setGeminiKey').value = settings.geminiKey;
+  $('#setGeminiModel').value = settings.geminiModel;
+  $('#setGuard').checked = settings.guard;
+  showProviderFields();
   $('#setApiKey').value = settings.apiKey;
   $('#setModel').value = settings.model;
   $('#setAutoAi').checked = settings.autoAi;
@@ -1336,9 +1470,14 @@ function fillSettings() {
   $('#setAutoShot').checked = settings.autoShot;
 }
 fillSettings();
+updateAiUi();
 
 function readSettings() {
   settings = {
+    provider: $('#setProvider').value,
+    geminiKey: $('#setGeminiKey').value.trim(),
+    geminiModel: $('#setGeminiModel').value.trim(),
+    guard: $('#setGuard').checked,
     apiKey: $('#setApiKey').value.trim(),
     model: $('#setModel').value,
     autoAi: $('#setAutoAi').checked,
@@ -1353,6 +1492,7 @@ function readSettings() {
   };
   storeSettings();
   fillEntityList();
+  updateAiUi();
 }
 $('#btnSaveSettings').addEventListener('click', () => {
   readSettings();
